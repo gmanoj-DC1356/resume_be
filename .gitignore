@@ -1,0 +1,17 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+db.sqlite3
+staticfiles/
+.idea/
+.vscode/
+dist/
+# Resume PDFs (PII), local Milvus store and model cache must never be committed
+data/
+*.pdf
+*.db
+.cache/
+resumes/migrations
+accounts/migrations
+matching/migrations

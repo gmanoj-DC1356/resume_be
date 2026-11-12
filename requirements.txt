@@ -1,0 +1,7 @@
+Django==6.1.2
+djangorestframework==3.18.3
+django-cors-headers==4.9.0
+# matching engine (Phase 1) - versions not yet pinned
+pymilvus
+sentence-transformers
+pypdf

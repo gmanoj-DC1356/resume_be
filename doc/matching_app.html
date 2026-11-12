@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>matching app - modules and execution flow</title>
+<style>
+  body { font-family: system-ui, Segoe UI, sans-serif; max-width: 960px; margin: 2rem auto; padding: 0 1rem; line-height: 1.55; color: #1f2933; }
+  h1, h2 { border-bottom: 1px solid #d9e2ec; padding-bottom: .3rem; }
+  table { border-collapse: collapse; width: 100%; margin: 1rem 0; }
+  th, td { border: 1px solid #d9e2ec; padding: .5rem .7rem; text-align: left; vertical-align: top; }
+  th { background: #f0f4f8; }
+  code, pre { background: #f0f4f8; border-radius: 4px; }
+  code { padding: .1rem .3rem; }
+  pre { padding: .8rem; overflow-x: auto; }
+</style>
+</head>
+<body>
+
+<h1>The <code>matching</code> app</h1>
+<p>
+  <code>matching</code> is a Django app, "Module 3 - Resume matching engine &amp; knowledge base".
+  Today it implements only the <strong>ingestion half</strong> of a RAG-style pipeline: resume PDFs go in,
+  are chunked and embedded, and are stored in Milvus. The query/matching half and the real API endpoints do not exist yet.
+</p>
+
+<h2>Modules</h2>
+<table>
+  <tr><th>Path</th><th>Role</th></tr>
+  <tr><td><code>conf.py</code></td><td>
+    Frozen <code>MatchingSettings</code> dataclass read from environment variables: Milvus URI, token, DB name and collection;
+    embedding model (default <code>BAAI/bge-large-en-v1.5</code>, dim 1024) and BGE query prefix; index type (FLAT or HNSW);
+    chunk size (300 words) and overlap (40); PDF limits (10 MB, 20 pages); embed batch size.
+    Milvus variables use a <code>MATCHING_</code> prefix because pymilvus parses <code>MILVUS_URI</code> itself on import.
+    <code>get_matching_settings()</code> is the accessor.</td></tr>
+  <tr><td><code>ingestion/pdf_loader.py</code></td><td>
+    <code>iter_pdf_paths</code> yields <code>.pdf</code> files directly under the root, skipping symlinks, oversize files and paths resolving outside the root.
+    <code>load_pdf</code> checks the <code>%PDF</code> magic bytes and page limit, extracts text with <code>pypdf</code>, and returns a
+    <code>LoadedPdf</code> whose <code>resume_id</code> is the first 16 hex chars of the file's SHA-256. Scanned PDFs with no text are rejected (OCR out of scope).</td></tr>
+  <tr><td><code>ingestion/chunker.py</code></td><td>
+    <code>split_sections</code> detects headings by regex (summary, experience, skills, education); text before the first heading is "summary".
+    <code>chunk_text</code> slides a word window (<code>max_words</code>, <code>overlap_words</code>) over each section and returns
+    <code>Chunk(chunk_idx, section, text)</code> objects. It raises an error if overlap &ge; size.</td></tr>
+  <tr><td><code>embedding/embedder.py</code></td><td>
+    <code>Embedder</code> wraps <code>SentenceTransformer</code> (lazy import) and checks the model dimension against <code>EMBED_DIM</code>.
+    <code>embed_documents</code> returns L2-normalised vectors with no prefix; <code>embed_query</code> adds the BGE query prefix.
+    One class serves ingestion and queries so vectors stay comparable.</td></tr>
+  <tr><td><code>store/milvus_store.py</code></td><td>
+    <code>get_client</code> uses Milvus Lite (local file) for a path URI, or a server for <code>http(s)://</code>.
+    <code>ensure_collection</code> builds the schema and COSINE index (optionally dropping first with <code>reset</code>).
+    <code>assert_model_compatible</code> refuses to mix vectors from different models.
+    <code>resume_exists</code> checks by hash, validating the ID against <code>^[0-9a-f]{16}$</code> before using it in the filter.
+    <code>upsert_chunks</code> writes rows.</td></tr>
+  <tr><td><code>ingestion/pipeline.py</code></td><td><code>ingest_folder</code> orchestrates the steps and returns an <code>IngestReport</code> (ingested, skipped, failed, chunks).</td></tr>
+  <tr><td><code>management/commands/ingest_resumes.py</code></td><td>CLI entry point.</td></tr>
+  <tr><td><code>views.py</code> / <code>urls.py</code></td><td>Placeholder <code>GET ping/</code> endpoint under <code>app_name="matching"</code>.</td></tr>
+  <tr><td><code>models.py</code>, <code>admin.py</code>, <code>apps.py</code></td><td>Django boilerplate; <code>models.py</code> and <code>admin.py</code> are empty.</td></tr>
+  <tr><td><code>tests.py</code>, <code>test_chunker.py</code></td><td><code>tests.py</code> is a stub; <code>test_chunker.py</code> is 31 lines.</td></tr>
+</table>
+
+<h2>Milvus collection schema</h2>
+<table>
+  <tr><th>Field</th><th>Type</th><th>Notes</th></tr>
+  <tr><td><code>chunk_id</code></td><td>VARCHAR(64), primary key</td><td><code>{resume_id}:{chunk_idx}</code></td></tr>
+  <tr><td><code>resume_id</code></td><td>VARCHAR(16)</td><td>Content hash</td></tr>
+  <tr><td><code>filename</code></td><td>VARCHAR(256)</td><td>Truncated</td></tr>
+  <tr><td><code>section</code></td><td>VARCHAR(32)</td><td>summary / experience / skills / education</td></tr>
+  <tr><td><code>text</code></td><td>VARCHAR(8192)</td><td>Chunk text, truncated</td></tr>
+  <tr><td><code>embed_model</code></td><td>VARCHAR(128)</td><td>Model used for the vector</td></tr>
+  <tr><td><code>dense_vec</code></td><td>FLOAT_VECTOR(dim)</td><td>COSINE index; dynamic fields enabled for Phase 2</td></tr>
+</table>
+
+<h2>End-to-end execution</h2>
+<pre>python manage.py ingest_resumes --input-dir data/resumes [--reset]</pre>
+<ol>
+  <li><strong>Command</strong> (<code>ingest_resumes.py</code>): parses arguments, loads settings, calls <code>ingest_folder(...)</code>.
+      <code>NotADirectoryError</code> and <code>RuntimeError</code> become a clean <code>CommandError</code>.</li>
+  <li><strong>Setup</strong> (<code>pipeline.py</code>): connect with <code>get_client</code>; <code>ensure_collection</code> creates schema and index if missing;
+      <code>assert_model_compatible</code> checks existing data against the configured model; <code>Embedder</code> loads the model.</li>
+  <li><strong>Per PDF</strong> (loop over <code>iter_pdf_paths</code>):
+    <ol>
+      <li><code>load_pdf</code> extracts text and computes the content-hash <code>resume_id</code>.</li>
+      <li><code>resume_exists</code> skips already-ingested files. Ingestion is idempotent and renamed files are still recognised.</li>
+      <li><code>chunk_text</code> produces section-aware, overlapping chunks.</li>
+      <li><code>embed_documents</code> produces normalised vectors in batches.</li>
+      <li>Rows are built (filename truncated to 256, text to 8192) and written with <code>upsert_chunks</code>.</li>
+      <li>Any exception is caught per file, logged without resume text, and the file is added to <code>report.failed</code>; one bad PDF does not stop the run.</li>
+    </ol></li>
+  <li><strong>Report</strong>: prints <code>Ingested N resumes (M chunks), skipped K unchanged, failed F</code> and lists failed files on stderr.</li>
+</ol>
+
+<h2>Gaps and notes</h2>
+<ul>
+  <li><strong>No retrieval yet.</strong> <code>embed_query</code> and the query prefix are ready, but <code>milvus_store</code> has no search function and the views/urls hold only <code>ping</code>.</li>
+  <li><strong>Matching logic is not written</strong>: no scoring and no job-description-to-resume flow.</li>
+  <li><strong>Security.</strong> The <code>resume_exists</code> filter uses an f-string, but the ID is regex-validated first. The Milvus token comes from the environment only (keep it in <code>.env</code> or a secrets manager).
+      Resumes contain personal data: ingest only synthetic or approved data and keep <code>data/milvus_resumes.db</code> out of version control.</li>
+  <li><strong>Smaller issues.</strong>
+    Headings must match a whole line, so "Work Experience" is not detected (the regex has "work history" only); "projects" maps to experience.
+    <code>assert_model_compatible</code> queries with <code>filter=""</code>, which some Milvus versions reject; verify against your pymilvus version.
+    Settings defaults are read at import time, so env changes need a restart.
+    <code>load_pdf</code> reads the file twice (bytes, then <code>PdfReader</code>); harmless.</li>
+</ul>
+<p><em>Based on a code read only; the code and tests were not run. Run SAST, dependency scanning and human review before production use.</em></p>
+
+</body>
+</html>
