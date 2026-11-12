@@ -95,6 +95,23 @@ Scoring (starting values in `matching/conf.py`, tune in Phase 6): chunk similari
 (0.7 x best + 0.3 x mean of top 3), rescaled above `SEMANTIC_FLOOR`; final = 0.6 x skill coverage + 0.4 x semantic
 (semantic only when there are no skills to compare). Each search is stored as a `SearchSession` + `SearchResult` rows for the caller.
 
+## Resume viewer API (resumes app, Manoj)
+`GET /api/v1/resumes/<resume_id>/pdf/` streams a resume PDF for the in-app reader. `<resume_id>` is the `resumeId` that
+search results return (`external_id`, or `r_<candidate_ref>` when none is set). Any signed-in recruiter may open any
+resume (`resumes.permissions.CanViewResume` is the one place to tighten that). This endpoint always requires login,
+also in DEBUG: log in at `/admin/` first (the UI dev server forwards `/admin` and `/api` to Django).
+
+| Case | Response |
+|---|---|
+| Signed in, resume found, file readable | `200` `application/pdf`, inline, `Cache-Control: private, no-store`, filename = the public id |
+| Not signed in | `401`/`403` |
+| Unknown id, malformed id, file missing, file outside the allowed folder, not a real PDF, non-local location | `404` with the same message (`Resume not available.`) |
+
+Files are served only from `RESUME_FILES_ROOT` (default `data/resumes`, the folder `ingest_resumes --input-dir` reads).
+Ingest from another folder? Set `RESUME_FILES_ROOT` in `.env` to it (full path); a resume whose file is outside is never served.
+Seeded sample candidates (`seed_sample_data`, location `sample://...`) have no file: in DEBUG only, a synthetic one-page PDF is
+generated from their profile so the reader can be tried locally. Tests use synthetic PDFs only.
+
 ## Known gaps (tracked)
 - Auth is session-only until the JWT module lands; Simple JWT approval and security-team confirmation on app-managed passwords are open.
 - Login rate limiting, refresh token in http-only cookie: part of the accounts module.

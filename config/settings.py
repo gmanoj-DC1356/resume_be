@@ -169,3 +169,8 @@ if not DEBUG:
     SECURE_HSTS_SECONDS = 31536000
 SECURE_CONTENT_TYPE_NOSNIFF = True
 X_FRAME_OPTIONS = "DENY"
+
+# --- Resume viewer -------------------------------------------------------------
+# Resume PDFs are served only from inside this folder (the folder `ingest_resumes --input-dir` reads).
+# A resume whose file lies elsewhere is never served (fail closed).
+RESUME_FILES_ROOT = Path(os.environ.get("RESUME_FILES_ROOT") or BASE_DIR / "data" / "resumes")
